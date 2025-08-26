@@ -2,19 +2,26 @@ import streamlit as st
 import mistletoe
 import re
 
-# --- Simplified Pre-processor ---
-# It does only one thing: replace '---' on its own line with a keyword.
+# --- Pré-processeur et Marqueurs ---
 HR_PLACEHOLDER = "-HR-"
+# Marqueur pour gérer l'espacement des titres
+TITLE_MARKER = "@@TITLE@@"
 
 
 def preprocess_markdown(text):
+    """
+    Gère les lignes horizontales et les titres de style Setext avant l'analyse.
+    """
+    # Gère les titres de style Setext (Titre\n---) en premier
+    text = re.sub(r'^(?!#)(.+)\n(-{3,})$', r'## \1', text, flags=re.MULTILINE)
+
+    # Remplace les lignes horizontales par un placeholder
     lines = text.split('\n')
-    # Replace any line that is '---' (and nothing else) with our keyword
     processed_lines = [HR_PLACEHOLDER if re.fullmatch(r'-{3,}', line.strip()) else line for line in lines]
     return "\n".join(processed_lines)
 
 
-# --- Core Conversion Logic ---
+# --- Cœur de la logique de conversion ---
 
 def render_ascii(node):
     if node is None: return ""
@@ -23,21 +30,23 @@ def render_ascii(node):
     if node_class_name == 'Heading':
         if not node.children: return ""
         text = "".join(render_ascii(child) for child in node.children).strip().upper()
-        # Setext-style title (Text\n---) is also parsed as a Level 2 Heading
+
         if node.level == 1:
             width = len(text)
-            return f"+-{'-' * width}-+\n| {text} |\n+-{'-' * width}-+\n\n"
+            title_block = f"+-{'-' * width}-+\n| {text} |\n+-{'-' * width}-+"
         elif node.level == 2:
-            return f"{text}\n{'=' * len(text)}\n\n"
+            title_block = f"{text}\n{'=' * len(text)}"
         elif node.level == 3:
-            return f"{text}\n{'-' * len(text)}\n\n"
+            title_block = f"{text}\n{'-' * len(text)}"
         else:
-            return f"{text}\n\n"
+            title_block = f"{text}"
+
+        # On retourne le marqueur suivi du bloc de titre pour post-traitement
+        return f"{TITLE_MARKER}{title_block}\n\n"
 
     elif node_class_name == 'Paragraph':
         return "".join(render_ascii(child) for child in node.children) + "\n"
 
-    # HANDLE LINE BREAKS
     elif node_class_name == 'LineBreak':
         return "\n"
 
@@ -47,7 +56,6 @@ def render_ascii(node):
         start_num = node.start if is_ordered else 1
         for i, item in enumerate(node.children, start=start_num):
             prefix = f"{i}. " if is_ordered else "- "
-            # No extra \n needed, as paragraphs within list items already provide one
             content = "".join(render_ascii(child) for child in item.children).strip()
             output.append(f"  {prefix}{content}")
         return "\n".join(output) + "\n\n"
@@ -82,78 +90,72 @@ def render_ascii(node):
     return ""
 
 
-# --- Main Function ---
+# --- Fonction principale ---
 
 def markdown_to_ascii(text):
     if not text or not text.strip(): return ""
 
-    # Manually convert Setext-style headers (e.g., "Title\n---") to standard "## Title"
-    # This must be done before the pre-processor handles horizontal rules.
-    text = re.sub(r'^(?!#)(.+)\n(-{3,})$', r'## \1', text, flags=re.MULTILINE)
-
     preprocessed_text = preprocess_markdown(text)
     doc = mistletoe.Document(preprocessed_text)
     raw_output = "".join(render_ascii(child) for child in doc.children)
-    
-    # Final replacement of the placeholder with the actual horizontal rule
-    final_output = raw_output.replace(HR_PLACEHOLDER, '-' * 70)
-    
-    # Clean up excessive newlines for a tighter output
+
+    output_with_markers = raw_output.replace(HR_PLACEHOLDER, '-' * 70)
+
+    # CORRECTION FINALE : GESTION DE LA LIGNE VIDE AVANT LES TITRES
+    # 1. On remplace n'importe quel espacement (ou absence d'espacement) avant un titre par EXACTEMENT DEUX sauts de ligne.
+    spaced_output = re.sub(r'\s*(' + re.escape(TITLE_MARKER) + r')', r'\n\n\1', output_with_markers)
+    # 2. On supprime les marqueurs.
+    final_output = spaced_output.replace(TITLE_MARKER, '')
+
+    # Nettoyage des sauts de ligne excessifs possibles ailleurs
     final_output = re.sub(r'\n{3,}', '\n\n', final_output)
 
     return final_output.strip()
 
 
-# --- Streamlit User Interface ---
+# --- Interface utilisateur avec Streamlit ---
 
-st.set_page_config(page_title="Markdown to ASCII Converter", layout="wide")
-st.title("📄 Markdown to ASCII Converter")
-st.write("Paste your Markdown text below to convert it to the ASCII layout.")
+st.set_page_config(page_title="Markdown to ASCII", layout="wide")
+st.title("📄 Convertisseur Markdown vers ASCII")
+st.write("Collez votre texte Markdown pour le transformer en ASCII.")
 
-default_md = """# Full Feature Test
+default_md = """# Test complet des fonctionnalités
 
-This is a paragraph.
-It continues on a second line,
-and even a third one.
-
+Ceci est un paragraphe.
+Il continue sur une deuxième ligne.
 ---
-
-Above, a horizontal line should have appeared.
-
-This is a title
+Un titre de niveau 2
 ---
-
-Above, an underlined level 2 title should have appeared.
-
-## Lists
-1. Item one.
-2. Item two.
-- Bullet A.
-- Bullet B.
+## Listes
+Un paragraphe collé au titre ci-dessus.
+1. Élément un.
+2. Élément deux.
+#### Un Titre sans espace avant
+Et un texte juste après.
 
 ## Table
 
-| Column 1      | Col 2       | A longer column header |
+| Colonne 1      | Col 2       | Une colonne plus longue |
 |---------------|-------------|------------------------|
-| Sophie        | Marceau     | Best actress           |
+| Sophie        | Marceau     | Meilleure actrice      |
 | Nikos         | Priniotakis | Colonel                |
 
-#### END
+#### FIN
 """
 
 col1, col2 = st.columns(2)
 with col1:
     st.header("Your ugly markdown")
-    markdown_input = st.text_area("Enter your text here", height=500, value=default_md)
+    markdown_input = st.text_area("Entrez votre texte ici", height=500, value=default_md)
 with col2:
     st.header("ASCII Result")
     if markdown_input:
         ascii_output = markdown_to_ascii(markdown_input)
         st.code(ascii_output, language="")
         st.download_button(
-            label="📥 Download .txt file",
+            label="📥 Télécharger le fichier .txt",
             data=ascii_output.encode('utf-8'),
-            file_name="output.txt",
+            file_name="ASCII.txt",
             mime="text/plain"
         )
     else:

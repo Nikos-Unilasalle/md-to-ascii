@@ -2,14 +2,12 @@ import streamlit as st
 import mistletoe
 import re
 
-# --- Dépendance pour la césure ---
 try:
     import pyphen
 except ImportError:
     st.error("La bibliothèque 'pyphen' est requise. Veuillez l'installer avec : pip install pyphen")
     st.stop()
 
-# --- Pré-processeur (inchangé) ---
 HR_PLACEHOLDER = "-HR-"
 TITLE_MARKER = "@@TITLE@@"
 
@@ -21,8 +19,6 @@ def preprocess_markdown(text):
     return "\n".join(processed_lines)
 
 
-# --- Cœur de la logique de conversion (VOTRE CLASSE, INTÉGRÉE) ---
-
 class AsciiRenderer:
     def __init__(self, justification='Non-justifié', line_width=70, use_hyphenation=True):
         self.justification = justification
@@ -31,7 +27,6 @@ class AsciiRenderer:
         try:
             self.hyphenator = pyphen.Pyphen(lang='fr_FR')
         except Exception:
-            # En cas d'échec (ex: dictionnaire manquant), on désactive la césure
             self.hyphenator = None
             self.use_hyphenation = False
 
@@ -41,7 +36,6 @@ class AsciiRenderer:
         """Retourne les positions de césure possibles dans 'word' (pyphen)"""
         if not self.hyphenator:
             return []
-        # La césure n'est pertinente que pour les mots assez longs
         if len(word) < 6:
             return []
         return list(self.hyphenator.positions(word))
@@ -53,7 +47,6 @@ class AsciiRenderer:
         """
         positions = self._hyphen_positions(word)
         for i in reversed(positions):
-            # On ne coupe pas s'il reste moins de 3 caractères
             if i > 2 and len(word) - i > 2:
                 part1 = word[:i] + "-"
                 part2 = word[i:]
@@ -78,22 +71,18 @@ class AsciiRenderer:
                 current_line = candidate
                 continue
 
-            # Le mot ne rentre pas. On doit traiter la ligne actuelle et le mot.
             if current_line:
                 lines.append(current_line)
 
-            # Maintenant, on traite le mot qui déborde sur une nouvelle ligne
             if len(word) > width and enable_hyphen:
-                # Le mot seul est trop long, on tente de le couper
                 head, tail = self._split_with_hyphen(word, width)
                 if head:
                     lines.append(head)
-                    words.insert(0, tail)  # On remet le reste au début de la liste
+                    words.insert(0, tail)
                     current_line = ""
-                else:  # Pas de coupe possible, on met le mot et on continue
+                else:  
                     current_line = word
             else:
-                # Le mot n'est pas trop long, il commence juste la nouvelle ligne
                 current_line = word
 
         if current_line:
@@ -145,13 +134,9 @@ class AsciiRenderer:
             else:
                 formatted_line = line
 
-            # On ajoute l'indentation (qui peut être le préfixe de la ligne)
-            # à la première ligne du bloc généré, et des espaces pour les suivantes.
             if i == 0:
                 output_lines.append(indent + formatted_line)
             else:
-                # L'indentation pour les lignes suivantes est constituée d'espaces
-                # pour s'aligner avec le début du contenu de la première ligne.
                 subsequent_indent = ' ' * len(indent)
                 output_lines.append(subsequent_indent + formatted_line)
 
@@ -192,10 +177,8 @@ class AsciiRenderer:
             )
             output_paragraph.append(formatted_block)
 
-        # Le _format_block gère maintenant l'indentation, donc on join simplement
         return "\n".join(output_paragraph) + "\n\n"
 
-    # --- Les autres méthodes render_* sont simplifiées ou utilisent la nouvelle logique ---
 
     def render_heading(self, node):
         if not node.children: return ""
@@ -232,7 +215,6 @@ class AsciiRenderer:
             justify = (self.justification == 'Justifié')
             use_hyphen = self.use_hyphenation and justify
 
-            # On réutilise notre puissant _format_block
             formatted_item = self._format_block(
                 content,
                 width=content_width,
@@ -243,7 +225,7 @@ class AsciiRenderer:
             output_list.append(formatted_item)
         return "\n".join(output_list) + "\n\n"
 
-    def render_table(self, node):  # Inchangé
+    def render_table(self, node):
         def get_cell_content(cell):
             return "".join(self.render(child) for child in cell.children).strip()
 
@@ -264,7 +246,6 @@ class AsciiRenderer:
         return "\n".join(output_lines) + "\n\n"
 
 
-# --- Fonction principale (inchangée) ---
 def markdown_to_ascii(text, justification='Non-justifié', line_width=70, use_hyphenation=True):
     if not text or not text.strip(): return ""
     preprocessed_text = preprocess_markdown(text)
@@ -278,12 +259,11 @@ def markdown_to_ascii(text, justification='Non-justifié', line_width=70, use_hy
     return final_output.strip()
 
 
-# --- Interface utilisateur avec Streamlit (inchangée) ---
 st.set_page_config(page_title="Markdown to ASCII", layout="wide")
 st.title("📄 Convertisseur Markdown vers ASCII")
 st.write("Collez votre texte Markdown pour le transformer en ASCII, avec des options de justification et de césure.")
 
-default_md = """- Finalisation du projet: Amélioration de la structure du code, documentation complète et présentation aux utilisateurs. Note : 3.5/5 *Commentaire : Cette section est le cœur du mémoire et elle est globalement très bien exécutée, avec une phase exploratoire rigoureuse et une bonne compréhension des différentes techniques de clustering. Cependant, plusieurs points appellent à une critique plus sévère : - La déclaration que la qualité des données est "satisfaisante", après avoir mentionné des cas avec 30% de valeurs manquantes pour les IP et une précision très variable pour les coordonnées, est optimiste et manque de nuance. L'impact de ces lacunes sur les résultats des clusters aurait pu être plus explicitement discuté. - Le choix initial d'écarter la dimension temporelle pour la création des clusters, tout en la mentionnant comme une piste d'amélioration potentielle, révèle une opportunité manquée d'intégrer une composante riche dès le départ, ce qui aurait pu complexifier mais enrichir l'analyse des regroupements.*"""
+default_md = """# Your Markdown text heres"""
 
 with st.sidebar:
     st.header("⚙️ Options de formatage")

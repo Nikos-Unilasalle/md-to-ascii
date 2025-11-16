@@ -142,6 +142,63 @@ class AsciiRenderer:
 
         return "\n".join(output_lines)
 
+    def _distribute_column_widths_exact(self, max_widths, target_width):
+        """
+        Distribution proportionnelle qui GARANTIT que la somme = target_width.
+        Respecte une largeur minimale de 3 caractères par colonne.
+        """
+        n_cols = len(max_widths)
+        if n_cols == 0:
+            return []
+
+        MIN_COL_WIDTH = 3
+
+        # Vérification du cas impossible
+        if target_width < MIN_COL_WIDTH * n_cols:
+            return [MIN_COL_WIDTH] * n_cols
+
+        # Si toutes les colonnes sont vides
+        total_max = sum(max_widths)
+        if total_max == 0:
+            base = target_width // n_cols
+            widths = [base] * n_cols
+            remainder = target_width - sum(widths)
+            for i in range(remainder):
+                widths[i] += 1
+            return widths
+
+        # Distribution proportionnelle initiale
+        widths = []
+        for w in max_widths:
+            # Calcul proportionnel avec arrondi
+            width = max(MIN_COL_WIDTH, int(round(w * target_width / total_max)))
+            widths.append(width)
+
+        # Ajuster l'erreur d'arrondi
+        diff = target_width - sum(widths)
+
+        if diff > 0:
+            # Il manque de la largeur: l'ajouter aux colonnes les plus "compressées"
+            # On calcule un ratio largeur/naturel pour voir qui a perdu le plus
+            ratios = [(widths[i] / max_widths[i] if max_widths[i] > 0 else 1, i) for i in range(n_cols)]
+            ratios.sort()  # Plus petit ratio = plus compressé
+            for i in range(diff):
+                idx = ratios[i % n_cols][1]
+                widths[idx] += 1
+        elif diff < 0:
+            # Trop de largeur: la retirer des colonnes les plus larges
+            sorted_idx = sorted(range(n_cols), key=lambda i: widths[i], reverse=True)
+            for i in range(-diff):
+                if widths[sorted_idx[i]] > MIN_COL_WIDTH:
+                    widths[sorted_idx[i]] -= 1
+
+        # Vérification finale (sécurité)
+        final_sum = sum(widths)
+        if final_sum != target_width:
+            widths[-1] += target_width - final_sum
+
+        return widths
+
     # ---------- Mistletoe rendering ----------
 
     def render(self, node):
@@ -171,14 +228,13 @@ class AsciiRenderer:
             formatted_block = self._format_block(
                 content,
                 width=content_width,
-                indent=prefix,  # C'est le préfixe de la PREMIÈRE ligne
+                indent=prefix,
                 justify=justify,
                 enable_hyphen=use_hyphen
             )
             output_paragraph.append(formatted_block)
 
         return "\n".join(output_paragraph) + "\n\n"
-
 
     def render_heading(self, node):
         if not node.children: return ""
@@ -197,6 +253,10 @@ class AsciiRenderer:
         return "\n"
 
     def render_rawtext(self, node):
+        return node.content if hasattr(node, 'content') else ""
+
+    def render_inlinecode(self, node):
+        """Gère le texte entre backticks (code inline)"""
         return node.content if hasattr(node, 'content') else ""
 
     def render_default(self, node):
@@ -227,22 +287,119 @@ class AsciiRenderer:
 
     def render_table(self, node):
         def get_cell_content(cell):
-            return "".join(self.render(child) for child in cell.children).strip()
+            """Récupère le contenu texte d'une cellule, gère les backticks et autres formats"""
+            if not cell or not hasattr(cell, 'children') or not cell.children:
+                return ""
 
-        if not hasattr(node, 'header') or not node.header.children: return ""
-        header_content = [get_cell_content(cell) for cell in node.header.children]
-        body_rows_content = [[get_cell_content(cell) for cell in row.children] for row in node.children]
-        column_widths = [len(h) for h in header_content]
+            parts = []
+            for child in cell.children:
+                parts.append(self.render(child))
+
+            return "".join(parts).strip()
+
+        # 1. Extraction des données du tableau
+        if not hasattr(node, 'header') or not node.header.children:
+            return ""
+
+        header_cells = node.header.children
+        n_cols = len(header_cells)
+        if n_cols == 0:
+            return ""
+
+        header_content = [get_cell_content(cell) for cell in header_cells]
+        body_rows_content = []
+
+        for row in node.children:
+            if hasattr(row, 'children') and row.children:
+                # Limiter au nombre de colonnes du header
+                cells = row.children[:n_cols]
+                body_rows_content.append([get_cell_content(cell) for cell in cells])
+
+        # 2. Calculer la largeur structurelle exacte
+        # Format: | cell1 | cell2 | cell3 |
+        # Largeur = sum(widths) + 3*n_cols (bordures et séparateurs)
+        structural_width = 3 * n_cols
+
+        # 3. Largeur disponible pour le contenu
+        available_content_width = self.line_width - structural_width
+
+        if available_content_width < 0:
+            return f"[Erreur: line_width doit être >= {structural_width}]\n\n"
+
+        # 4. Largeurs naturelles maximales
+        max_widths = [len(h) for h in header_content]
         for row in body_rows_content:
             for i, cell in enumerate(row):
-                if i < len(column_widths): column_widths[i] = max(column_widths[i], len(cell))
+                if i < len(max_widths):
+                    max_widths[i] = max(max_widths[i], len(cell))
 
-        def render_table_row(row_data):
-            return "| " + " | ".join([c.ljust(column_widths[i]) for i, c in enumerate(row_data)]) + " |"
+        # 5. Calculer les largeurs finales des colonnes
+        total_natural_width = sum(max_widths)
 
+        if total_natural_width <= available_content_width:
+            # Tout tient, utiliser les largeurs naturelles
+            column_widths = max_widths
+        else:
+            # Compression proportionnelle nécessaire
+            column_widths = self._distribute_column_widths_exact(max_widths, available_content_width)
+
+        # 6. Formatage du contenu de chaque cellule
+        justify = (self.justification == 'Justifié')
+        use_hyphen = self.use_hyphenation and justify
+
+        def format_cell(text, width):
+            # Wrapper le texte pour tenir dans la largeur
+            lines = self._wrap_words(text, width, use_hyphen)
+
+            # Remplir chaque ligne à la largeur exacte
+            formatted = []
+            for i, line in enumerate(lines):
+                if justify and i < len(lines) - 1 and not line.endswith('-'):
+                    formatted.append(self._justify_line(line, width))
+                else:
+                    formatted.append(line.ljust(width))
+
+            return formatted
+
+        # 7. Construire le tableau ligne par ligne
+        output_lines = []
+
+        # --- En-tête ---
+        header_lines = [format_cell(h, column_widths[i]) for i, h in enumerate(header_content)]
+        header_height = max(len(lines) for lines in header_lines) if header_lines else 1
+
+        for line_idx in range(header_height):
+            parts = []
+            for col_idx in range(n_cols):
+                lines = header_lines[col_idx]
+                cell = lines[line_idx] if line_idx < len(lines) else " " * column_widths[col_idx]
+                parts.append(cell)
+            output_lines.append("| " + " | ".join(parts) + " |")
+
+        # --- Séparateur ---
         separator = "|-" + "-|-".join(['-' * w for w in column_widths]) + "-|"
-        output_lines = [render_table_row(header_content), separator,
-                        *[render_table_row(row) for row in body_rows_content]]
+        output_lines.append(separator)
+
+        # --- Corps du tableau ---
+        for row in body_rows_content:
+            # Formater chaque cellule de la rangée
+            cell_lines = [format_cell(cell, column_widths[i]) for i, cell in enumerate(row)]
+            row_height = max(len(lines) for lines in cell_lines) if cell_lines else 1
+
+            # Construire chaque ligne de la rangée
+            for line_idx in range(row_height):
+                parts = []
+                for col_idx in range(n_cols):
+                    lines = cell_lines[col_idx]
+                    cell = lines[line_idx] if line_idx < len(lines) else " " * column_widths[col_idx]
+                    parts.append(cell)
+                output_lines.append("| " + " | ".join(parts) + " |")
+
+        # Vérification finale de la largeur
+        for i, line in enumerate(output_lines):
+            if len(line) > self.line_width:
+                output_lines[i] = line[:self.line_width]
+
         return "\n".join(output_lines) + "\n\n"
 
 
@@ -259,11 +416,21 @@ def markdown_to_ascii(text, justification='Non-justifié', line_width=70, use_hy
     return final_output.strip()
 
 
+# ---------- Interface Streamlit ----------
 st.set_page_config(page_title="Markdown to ASCII", layout="wide")
 st.title("📄 Convertisseur Markdown vers ASCII")
 st.write("Collez votre texte Markdown pour le transformer en ASCII, avec des options de justification et de césure.")
 
-default_md = """# Your Markdown text heres"""
+default_md = """# Test avec grand tableau
+
+| Type | Objectif secret | Détail / récompense |
+| :--- | :--- | :--- |
+| Société secrète : Les Gastronomes Libres | Défendre la soupe jusqu’à la fin, prouver que la cuisine est supérieure à la science. | Gagne 1 point de Loyauté par personne qui mange la soupe. |
+| Société secrète : Les Anti-Bouchons | Détruire toute infrastructure de recyclage alimentaire. | Récompense : promotion symbolique à Orange (avant exécution). |
+| Mutation cachée : Goût surdéveloppé | Tu ressens chaque molécule comme une émotion. Si la soupe “t’aime”, tu entends sa voix. | Peut détecter l’humeur de la soupe à chaque acte. |
+| Mutation cachée : Métabolisme inverse | Tout ce que tu manges devient instantanément toxique pour les autres. | Peut neutraliser un PNJ en “partageant un repas”. |
+| Dévotion aveugle à l’Ordinateur | Tu crois que tout ceci est un test de foi. Même mourir est un devoir. | Récompense : ton clone suivant arrive avec la mention “héroïque”. |
+| Agent double du Département du Bonheur | Ton objectif : que tout le monde rit, même pendant sa mort. | Si 3+ citoyens meurent en riant, tu gagnes une médaille. |"""
 
 with st.sidebar:
     st.header("⚙️ Options de formatage")
